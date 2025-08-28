@@ -6,8 +6,8 @@
   "scripts": {
     "generate": "prisma generate",
     "dev": "pnpm run generate && ts-node src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js"
+    "build": "pnpm run generate && tsc",
+    "start": "pnpm run generate && node dist/index.js"
   },
   "keywords": [],
   "author": "",
