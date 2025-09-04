@@ -2,11 +2,10 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 
 const JWT_SECRET = process.env.JWT_SECRET!;
+const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET!;
 
 export function authMiddleware(req: Request, res: Response, next: NextFunction) {
-  // 🔎 Récupérer le token depuis le cookie ou le header Authorization
-  const token = req.cookies?.jwt || req.headers['authorization']?.split(' ')[1];
-
+  const token = req.headers['authorization']?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Non authentifié' });
 
   try {
