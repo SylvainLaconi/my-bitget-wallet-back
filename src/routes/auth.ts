@@ -44,9 +44,8 @@ router.post('/login', async (req, res) => {
   res.cookie('jwt', token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'none',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     maxAge: 3600_000, // 1h
-    domain: process.env.FRONT_DOMAIN,
   });
 
   res.json({ token, user: { id: user.id, email: user.email } });
@@ -58,10 +57,8 @@ router.post('/logout', (req, res) => {
   res.cookie('jwt', '', {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'none',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     maxAge: 0, // expire immédiatement
-    path: '/',
-    domain: process.env.FRONT_DOMAIN,
   });
   res.json({ message: 'Déconnecté' });
 });

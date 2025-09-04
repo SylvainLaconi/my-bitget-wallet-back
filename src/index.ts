@@ -10,7 +10,7 @@ import cookieParser from 'cookie-parser';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
-const FRONT_URL = process.env.FRONT_URL || 'http://localhost:3000';
+const FRONT_URL = process.env.FRONT_URL || 'http://localhost:5173';
 
 const corsOptions = {
   origin: FRONT_URL,
