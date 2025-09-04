@@ -1,8 +1,8 @@
-import { z } from "zod";
+import { z } from 'zod';
 
 export const tokenInputSchema = z.object({
-  name: z.string().min(1, "Name is required"),
-  ticker: z.string().min(1, "Ticker is required"),
+  name: z.string().min(1, 'Name is required'),
+  ticker: z.string().min(1, 'Ticker is required'),
 });
 
 export const tokenOutputSchema = z.object({
