@@ -39,45 +39,45 @@ router.post('/login', async (req, res) => {
 
   if (!valid) return res.status(401).json({ error: 'Mot de passe incorrect' });
 
-  const accessToken = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '15m' });
-  const refreshToken = jwt.sign({ userId: user.id }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+  const accessToken = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '1h' });
+  // const refreshToken = jwt.sign({ userId: user.id }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
 
-  // Set HTTP-only cookie
-  res.cookie('refreshToken', refreshToken, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-  });
+  // // Set HTTP-only cookie
+  // res.cookie('refreshToken', refreshToken, {
+  //   httpOnly: true,
+  //   secure: process.env.NODE_ENV === 'production',
+  //   sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+  //   maxAge: 7 * 24 * 60 * 60 * 1000,
+  // });
 
   res.json({ accessToken, user: { id: user.id, email: user.email } });
 });
 
-// REFRESH TOKEN
-router.get('/refresh-token', (req: Request, res: Response) => {
-  const token = req.cookies.refreshToken;
-  if (!token) return res.status(401).json({ error: 'Non authentifié' });
+// // REFRESH TOKEN
+// router.get('/refresh-token', (req: Request, res: Response) => {
+//   const token = req.cookies.refreshToken;
+//   if (!token) return res.status(401).json({ error: 'Non authentifié' });
 
-  try {
-    const payload = jwt.verify(token, JWT_REFRESH_SECRET) as { userId: string };
-    const newAccessToken = jwt.sign({ userId: payload.userId }, JWT_SECRET, { expiresIn: '15m' });
-    res.json({ accessToken: newAccessToken });
-  } catch {
-    return res.status(401).json({ error: 'Refresh token invalide' });
-  }
-});
+//   try {
+//     const payload = jwt.verify(token, JWT_REFRESH_SECRET) as { userId: string };
+//     const newAccessToken = jwt.sign({ userId: payload.userId }, JWT_SECRET, { expiresIn: '15m' });
+//     res.json({ accessToken: newAccessToken });
+//   } catch {
+//     return res.status(401).json({ error: 'Refresh token invalide' });
+//   }
+// });
 
-// Déconnexion
-router.post('/logout', (req: Request, res: Response) => {
-  // Supprime le cookie en le réinitialisant
-  res.cookie('refreshToken', '', {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    maxAge: 0, // expire immédiatement
-  });
-  res.json({ message: 'Déconnecté' });
-});
+// // Déconnexion
+// router.post('/logout', (req: Request, res: Response) => {
+//   // Supprime le cookie en le réinitialisant
+//   res.cookie('refreshToken', '', {
+//     httpOnly: true,
+//     secure: process.env.NODE_ENV === 'production',
+//     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+//     maxAge: 0, // expire immédiatement
+//   });
+//   res.json({ message: 'Déconnecté' });
+// });
 
 // Informations de l'utilisateur
 router.get('/me', authMiddleware, async (req: Request, res: Response) => {
