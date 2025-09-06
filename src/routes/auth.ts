@@ -3,10 +3,10 @@ import { prisma } from '../prisma';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { authMiddleware } from '../middlewares/auth';
+import { encrypt } from '../utils/crypto';
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET!;
-const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET!;
 
 // Inscription
 router.post('/register', async (req, res) => {
@@ -40,55 +40,60 @@ router.post('/login', async (req, res) => {
   if (!valid) return res.status(401).json({ error: 'Mot de passe incorrect' });
 
   const accessToken = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '1h' });
-  // const refreshToken = jwt.sign({ userId: user.id }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
-
-  // // Set HTTP-only cookie
-  // res.cookie('refreshToken', refreshToken, {
-  //   httpOnly: true,
-  //   secure: process.env.NODE_ENV === 'production',
-  //   sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-  //   maxAge: 7 * 24 * 60 * 60 * 1000,
-  // });
 
   res.json({ accessToken, user: { id: user.id, email: user.email } });
 });
 
-// // REFRESH TOKEN
-// router.get('/refresh-token', (req: Request, res: Response) => {
-//   const token = req.cookies.refreshToken;
-//   if (!token) return res.status(401).json({ error: 'Non authentifié' });
-
-//   try {
-//     const payload = jwt.verify(token, JWT_REFRESH_SECRET) as { userId: string };
-//     const newAccessToken = jwt.sign({ userId: payload.userId }, JWT_SECRET, { expiresIn: '15m' });
-//     res.json({ accessToken: newAccessToken });
-//   } catch {
-//     return res.status(401).json({ error: 'Refresh token invalide' });
-//   }
-// });
-
-// // Déconnexion
-// router.post('/logout', (req: Request, res: Response) => {
-//   // Supprime le cookie en le réinitialisant
-//   res.cookie('refreshToken', '', {
-//     httpOnly: true,
-//     secure: process.env.NODE_ENV === 'production',
-//     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-//     maxAge: 0, // expire immédiatement
-//   });
-//   res.json({ message: 'Déconnecté' });
-// });
-
 // Informations de l'utilisateur
 router.get('/me', authMiddleware, async (req: Request, res: Response) => {
-  // on récupére le userId de l'utilisateur
-  const userId = (req as any).userId!;
+  const userId = req.userId!;
 
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) return res.status(401).json({ error: 'Utilisateur inconnu' });
 
-  // on renvoie les informations de l'utilisateur
   res.json({ id: user.id, email: user.email });
+});
+
+// Renseigner les clés API Bitget
+router.post('/bitget-api', authMiddleware, async (req, res) => {
+  const userId = req.userId!;
+  const { apiKey, apiSecret, passphrase } = req.body;
+
+  if (!apiKey || !apiSecret || !passphrase) {
+    return res.status(400).json({ error: 'Tous les champs sont requis' });
+  }
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: {
+      apiKey: encrypt(apiKey),
+      apiSecret: encrypt(apiSecret),
+      passphrase: encrypt(passphrase),
+    },
+  });
+
+  res.json({ message: 'Clés Bitget sauvegardées ✅' });
+});
+
+// Mettre à jour les clés API Bitget
+router.put('/bitget-api', authMiddleware, async (req, res) => {
+  const userId = req.userId!;
+  const { apiKey, apiSecret, passphrase } = req.body;
+
+  if (!apiKey || !apiSecret || !passphrase) {
+    return res.status(400).json({ error: 'Tous les champs sont requis' });
+  }
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: {
+      apiKey: encrypt(apiKey),
+      apiSecret: encrypt(apiSecret),
+      passphrase: encrypt(passphrase),
+    },
+  });
+
+  res.json({ message: 'Clés Bitget sauvegardées ✅' });
 });
 
 export default router;

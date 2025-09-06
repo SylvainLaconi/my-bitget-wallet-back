@@ -5,12 +5,13 @@
   "main": "index.js",
   "scripts": {
     "generate": "prisma generate",
-    "dev": "pnpm run generate && ts-node src/index.ts",
+    "dev": "pnpm run generate && ts-node --files src/index.ts",
     "build": "pnpm run generate && tsc",
     "start": "pnpm run generate && node dist/index.js",
     "format": "prettier --write 'src/**/*.{ts,js,json}'",
     "lint": "eslint 'src/**/*.{ts,js,json}'",
-    "lint:fix": "eslint 'src/**/*.{ts,js,json}' --fix"
+    "lint:fix": "eslint 'src/**/*.{ts,js,json}' --fix",
+    "migrate": "prisma migrate dev"
   },
   "keywords": [],
   "author": "",
@@ -38,6 +39,7 @@
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "crypto": "^1.0.1",
+    "dotenv": "^17.2.2",
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
     "ws": "^8.18.3",

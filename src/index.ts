@@ -7,6 +7,7 @@ import authRoutes from './routes/auth';
 import tokensRoutes from './routes/tokens';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
+import { decrypt } from './utils/crypto';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -33,97 +34,144 @@ type SSEClient = {
   userId: string;
 };
 
-// // Liste des clients connectés
-// let clients: SSEClient[] = [];
+// Liste des clients connectés
+let clients: SSEClient[] = [];
+const userWebSockets: Record<string, WebSocket> = {};
 
-// // Endpoint SSE avec auth
-// app.get('/stream', authMiddleware, async (req: Request, res: Response) => {
-//   const userId = req.userId!;
-//   if (!userId) return res.status(401).end();
+// Endpoint SSE avec auth
+app.get('/stream', authMiddleware, async (req, res: Response) => {
+  const userId = req.userId!;
+  if (!userId) return res.status(401).end();
 
-//   // Headers SSE
-//   res.setHeader('Content-Type', 'text/event-stream');
-//   res.setHeader('Cache-Control', 'no-cache');
-//   res.setHeader('Connection', 'keep-alive');
-//   res.flushHeaders();
+  // Récupérer l'utilisateur
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) return res.status(401).end();
 
-//   // Ajouter le client
-//   const client: SSEClient = { res, userId };
-//   clients.push(client);
-//   console.log(`👥 Client SSE connecté pour userId=${userId} (${clients.length} total)`);
+  // --- Headers SSE ---
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
 
-//   // --- Charger les coins depuis la BDD ---
-//   const wallet = await prisma.walletCoin.findMany({ where: { userId } });
-//   wallet.forEach((coin) => res.write(`data: ${JSON.stringify(coin)}\n\n`));
+  // Ajouter le client
+  const client: SSEClient = { res, userId };
+  clients.push(client);
+  console.info(`👥 Client SSE connecté pour userId=${userId} (${clients.length} total)`);
 
-//   // Ping keep-alive
-//   const keepAlive = setInterval(() => {
-//     res.write(`event: ping\ndata: "keep-alive"\n\n`);
-//   }, 15000);
+  // --- Snapshot initial depuis la DB ---
+  const initialWallet = await prisma.walletCoin.findMany({
+    where: { userId },
+    include: { token: true },
+    orderBy: { token: { ticker: 'asc' } },
+  });
 
-//   // Déconnexion du client
-//   req.on('close', () => {
-//     clearInterval(keepAlive);
-//     clients = clients.filter((c) => c !== client);
-//     console.log(`❌ Client SSE déconnecté userId=${userId} (${clients.length} restants)`);
-//   });
-// });
+  res.write(`event: snapshot\ndata: ${JSON.stringify(initialWallet)}\n\n`);
 
-// // Connexion Bitget
-// connectBitgetWallet(async (coin: BitgetCoin & { userId: string }) => {
-//   let tokenId: string;
+  // --- Démarrage du WS Bitget (si pas déjà actif pour ce user) ---
+  if (user.apiKey && user.apiSecret && user.passphrase && !userWebSockets[userId]) {
+    connectBitgetWallet(
+      userId,
+      decrypt(user.apiKey),
+      decrypt(user.apiSecret),
+      decrypt(user.passphrase),
+      async (payload) => {
+        if ('snapshot' in payload) {
+          // 💾 Snapshot complet depuis WS → replace en DB
+          for (const coin of payload.snapshot) {
+            const token = await prisma.token.upsert({
+              where: { ticker: coin.coin },
+              update: {},
+              create: { ticker: coin.coin, name: coin.coin },
+            });
 
-//   const token = await prisma.token.findUnique({
-//     where: {
-//       ticker: coin.coin,
-//     },
-//   });
+            await prisma.walletCoin.upsert({
+              where: { userId_tokenId: { userId, tokenId: token.id } },
+              update: {
+                available: parseFloat(coin.available),
+                frozen: parseFloat(coin.frozen),
+                locked: parseFloat(coin.locked),
+                limitAvailable: parseFloat(coin.limitAvailable),
+                uTime: coin.uTime,
+              },
+              create: {
+                userId,
+                tokenId: token.id,
+                available: parseFloat(coin.available),
+                frozen: parseFloat(coin.frozen),
+                locked: parseFloat(coin.locked),
+                limitAvailable: parseFloat(coin.limitAvailable),
+                uTime: coin.uTime,
+              },
+            });
+          }
 
-//   if (!token) {
-//     // create token
-//     const newToken = await prisma.token.create({
-//       data: {
-//         ticker: coin.coin,
-//         name: coin.coin,
-//       },
-//     });
-//     tokenId = newToken.id;
-//   } else {
-//     tokenId = token.id;
-//   }
+          // 🔥 Push snapshot aux clients SSE
+          const wallet = await prisma.walletCoin.findMany({
+            where: { userId },
+            include: { token: true },
+            orderBy: { token: { ticker: 'asc' } },
+          });
 
-//   // Upsert en BDD
-//   await prisma.walletCoin.upsert({
-//     where: {
-//       userId_tokenId: {
-//         userId: coin.userId,
-//         tokenId,
-//       },
-//     },
-//     update: {
-//       available: parseFloat(coin.available),
-//       frozen: parseFloat(coin.frozen),
-//       locked: parseFloat(coin.locked),
-//       limitAvailable: parseFloat(coin.limitAvailable),
-//       uTime: coin.uTime,
-//     },
-//     create: {
-//       available: parseFloat(coin.available),
-//       frozen: parseFloat(coin.frozen),
-//       locked: parseFloat(coin.locked),
-//       limitAvailable: parseFloat(coin.limitAvailable),
-//       uTime: coin.uTime,
-//       userId: coin.userId,
-//       tokenId,
-//     },
-//   });
+          clients
+            .filter((c) => c.userId === userId)
+            .forEach((c) => c.res.write(`event: snapshot\ndata: ${JSON.stringify(wallet)}\n\n`));
+        }
 
-//   // Envoyer uniquement aux clients correspondants
-//   clients
-//     .filter((c) => c.userId === coin.userId)
-//     .forEach((c) => c.res.write(`data: ${JSON.stringify(coin)}\n\n`));
-// });
+        if ('update' in payload) {
+          const coin = payload.update;
+
+          const token = await prisma.token.upsert({
+            where: { ticker: coin.coin },
+            update: {},
+            create: { ticker: coin.coin, name: coin.coin },
+          });
+
+          const updatedCoin = await prisma.walletCoin.upsert({
+            where: { userId_tokenId: { userId, tokenId: token.id } },
+            update: {
+              available: parseFloat(coin.available),
+              frozen: parseFloat(coin.frozen),
+              locked: parseFloat(coin.locked),
+              limitAvailable: parseFloat(coin.limitAvailable),
+              uTime: coin.uTime,
+            },
+            create: {
+              userId,
+              tokenId: token.id,
+              available: parseFloat(coin.available),
+              frozen: parseFloat(coin.frozen),
+              locked: parseFloat(coin.locked),
+              limitAvailable: parseFloat(coin.limitAvailable),
+              uTime: coin.uTime,
+            },
+            include: { token: true },
+          });
+
+          // 🔥 Push update aux clients SSE
+          clients
+            .filter((c) => c.userId === userId)
+            .forEach((c) => c.res.write(`event: update\ndata: ${JSON.stringify(updatedCoin)}\n\n`));
+        }
+      },
+      () => {
+        delete userWebSockets[userId];
+      },
+    );
+  }
+
+  // Keep-alive ping
+  const keepAlive = setInterval(() => {
+    res.write(`event: ping\ndata: "keep-alive"\n\n`);
+  }, 15000);
+
+  // Déconnexion client
+  req.on('close', () => {
+    clearInterval(keepAlive);
+    clients = clients.filter((c) => c !== client);
+    console.info(`❌ Client SSE déconnecté userId=${userId} (${clients.length} restants)`);
+  });
+});
 
 app.listen(PORT, () => {
-  console.log(`✅ Server running on http://localhost:${PORT}`);
+  console.info(`✅ Server running on http://localhost:${PORT}`);
 });
