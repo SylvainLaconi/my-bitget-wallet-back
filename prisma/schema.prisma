@@ -47,6 +47,6 @@ model WalletCoin {
   locked    Float
   limitAvailable Float
   uTime     String
-
+  earnQuantity Float @default(0)
   @@unique([userId, tokenId])
 }

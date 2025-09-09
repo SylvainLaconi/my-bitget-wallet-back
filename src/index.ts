@@ -1,6 +1,6 @@
 import express, { Request, Response } from 'express';
 import { authMiddleware } from './middlewares/auth';
-import { connectBitgetWallet } from './bitget';
+import { connectBitgetWallet, connectPublicTickers, getEarnQuantity } from './bitget';
 import { prisma } from './prisma';
 import { BitgetCoin } from './schemas/bitget-coin';
 import authRoutes from './routes/auth';
@@ -37,6 +37,7 @@ type SSEClient = {
 // Liste des clients connectés
 let clients: SSEClient[] = [];
 const userWebSockets: Record<string, WebSocket> = {};
+const userPublicWebSockets: Record<string, WebSocket> = {};
 
 // Endpoint SSE avec auth
 app.get('/stream', authMiddleware, async (req, res: Response) => {
@@ -69,6 +70,8 @@ app.get('/stream', authMiddleware, async (req, res: Response) => {
 
   // --- Démarrage du WS Bitget (si pas déjà actif pour ce user) ---
   if (user.apiKey && user.apiSecret && user.passphrase && !userWebSockets[userId]) {
+    let earnQuantity = '0';
+
     connectBitgetWallet(
       userId,
       decrypt(user.apiKey),
@@ -84,6 +87,20 @@ app.get('/stream', authMiddleware, async (req, res: Response) => {
               create: { ticker: coin.coin, name: coin.coin },
             });
 
+            // Récupérer les quantités EARN pour le coin
+            try {
+              const res = await getEarnQuantity(
+                coin.coin,
+                decrypt(user.apiKey!),
+                decrypt(user.apiSecret!),
+                decrypt(user.passphrase!),
+              );
+
+              earnQuantity = res.find((r: any) => r.coin === coin.coin)?.amount || 0;
+            } catch (error) {
+              console.error('Error getting earn quantity:', error);
+            }
+
             await prisma.walletCoin.upsert({
               where: { userId_tokenId: { userId, tokenId: token.id } },
               update: {
@@ -91,6 +108,7 @@ app.get('/stream', authMiddleware, async (req, res: Response) => {
                 frozen: parseFloat(coin.frozen),
                 locked: parseFloat(coin.locked),
                 limitAvailable: parseFloat(coin.limitAvailable),
+                earnQuantity: parseFloat(earnQuantity),
                 uTime: coin.uTime,
               },
               create: {
@@ -100,6 +118,7 @@ app.get('/stream', authMiddleware, async (req, res: Response) => {
                 frozen: parseFloat(coin.frozen),
                 locked: parseFloat(coin.locked),
                 limitAvailable: parseFloat(coin.limitAvailable),
+                earnQuantity: parseFloat(earnQuantity),
                 uTime: coin.uTime,
               },
             });
@@ -126,6 +145,18 @@ app.get('/stream', authMiddleware, async (req, res: Response) => {
             create: { ticker: coin.coin, name: coin.coin },
           });
 
+          try {
+            const res = await getEarnQuantity(
+              coin.coin,
+              decrypt(user.apiKey!),
+              decrypt(user.apiSecret!),
+              decrypt(user.passphrase!),
+            );
+            earnQuantity = res.find((r: any) => r.coin === coin.coin)?.amount || '0';
+          } catch (error) {
+            console.error('Error getting earn quantity:', error);
+          }
+
           const updatedCoin = await prisma.walletCoin.upsert({
             where: { userId_tokenId: { userId, tokenId: token.id } },
             update: {
@@ -133,6 +164,7 @@ app.get('/stream', authMiddleware, async (req, res: Response) => {
               frozen: parseFloat(coin.frozen),
               locked: parseFloat(coin.locked),
               limitAvailable: parseFloat(coin.limitAvailable),
+              earnQuantity: parseFloat(earnQuantity),
               uTime: coin.uTime,
             },
             create: {
@@ -142,6 +174,7 @@ app.get('/stream', authMiddleware, async (req, res: Response) => {
               frozen: parseFloat(coin.frozen),
               locked: parseFloat(coin.locked),
               limitAvailable: parseFloat(coin.limitAvailable),
+              earnQuantity: parseFloat(earnQuantity),
               uTime: coin.uTime,
             },
             include: { token: true },
@@ -157,6 +190,17 @@ app.get('/stream', authMiddleware, async (req, res: Response) => {
         delete userWebSockets[userId];
       },
     );
+  }
+
+  // --- WS public (prix marché) ---
+  if (!userPublicWebSockets[userId]) {
+    const symbols = initialWallet.map((c) => `${c.token.ticker}USDT`);
+
+    connectPublicTickers(symbols, (ticker) => {
+      clients
+        .filter((c) => c.userId === userId)
+        .forEach((c) => c.res.write(`event: price\ndata: ${JSON.stringify(ticker)}\n\n`));
+    });
   }
 
   // Keep-alive ping
