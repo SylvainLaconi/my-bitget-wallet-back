@@ -158,6 +158,13 @@ export function connectPublicTickers(symbols: string[], onPrice: (ticker: any) =
     }
   });
 
+  ws.on('error', (err) => console.error('❌ Public WS error:', err));
+
+  // Keep-alive ping
+  setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) ws.send('ping');
+  }, PING_INTERVAL);
+
   ws.on('close', () => console.info('Public WS closed'));
 }
 
