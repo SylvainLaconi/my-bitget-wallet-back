@@ -1,50 +1,43 @@
 import express, { Request, Response } from 'express';
-import { authMiddleware } from './middlewares/auth';
-import { connectBitgetWallet, connectPublicTickers, getEarnQuantity } from './bitget';
-import { prisma } from './prisma';
-import { BitgetCoin } from './schemas/bitget-coin';
-import authRoutes from './routes/auth';
-import tokensRoutes from './routes/tokens';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
+import { prisma } from './prisma';
+import { authMiddleware } from './middlewares/auth';
 import { decrypt } from './utils/crypto';
+import { connectBitget, BitgetPayload, Channel, getEarnQuantity } from './bitget';
+
+import authRoutes from './routes/auth';
+import tokensRoutes from './routes/tokens';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 const FRONT_URL = process.env.FRONT_URL || 'http://localhost:5173';
 
-const corsOptions = {
-  origin: FRONT_URL,
-  methods: 'GET, POST, OPTIONS',
-  allowedHeaders: 'Content-Type, Authorization',
-  credentials: true,
-};
-
-// Middleware CORS (simple)
-app.use(cors(corsOptions));
+app.use(
+  cors({
+    origin: FRONT_URL,
+    methods: 'GET, POST, OPTIONS',
+    allowedHeaders: 'Content-Type, Authorization',
+    credentials: true,
+  }),
+);
 
 app.use(cookieParser());
 app.use(express.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/tokens', tokensRoutes);
 
-// Typage pour les clients SSE
-type SSEClient = {
-  res: Response;
-  userId: string;
-};
-
-// Liste des clients connectés
+// Typage clients SSE
+type SSEClient = { res: Response; userId: string };
 let clients: SSEClient[] = [];
-const userWebSockets: Record<string, WebSocket> = {};
-const userPublicWebSockets: Record<string, WebSocket> = {};
 
-// Endpoint SSE avec auth
+// Connexion WS Bitget par user
+const userWS: Record<string, boolean> = {};
+
 app.get('/stream', authMiddleware, async (req, res: Response) => {
   const userId = req.userId!;
   if (!userId) return res.status(401).end();
 
-  // Récupérer l'utilisateur
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) return res.status(401).end();
 
@@ -54,12 +47,12 @@ app.get('/stream', authMiddleware, async (req, res: Response) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
 
-  // Ajouter le client
+  // Ajouter client SSE
   const client: SSEClient = { res, userId };
   clients.push(client);
   console.info(`👥 Client SSE connecté pour userId=${userId} (${clients.length} total)`);
 
-  // --- Snapshot initial depuis la DB ---
+  // --- Snapshot initial depuis DB ---
   const initialWallet = await prisma.walletCoin.findMany({
     where: { userId },
     include: { token: true },
@@ -68,19 +61,31 @@ app.get('/stream', authMiddleware, async (req, res: Response) => {
 
   res.write(`event: snapshot\ndata: ${JSON.stringify(initialWallet)}\n\n`);
 
-  // --- Démarrage du WS Bitget (si pas déjà actif pour ce user) ---
-  if (user.apiKey && user.apiSecret && user.passphrase && !userWebSockets[userId]) {
+  // --- WS unifié Bitget ---
+  if (user.apiKey && user.apiSecret && user.passphrase && !userWS[userId]) {
     let earnQuantity = '0';
+    userWS[userId] = true;
 
-    connectBitgetWallet(
-      userId,
+    const symbols = initialWallet.map((c) => `${c.token.ticker}USDT`);
+
+    connectBitget(
       decrypt(user.apiKey),
       decrypt(user.apiSecret),
       decrypt(user.passphrase),
-      async (payload) => {
-        if ('snapshot' in payload) {
-          // 💾 Snapshot complet depuis WS → replace en DB
-          for (const coin of payload.snapshot) {
+      [
+        { channel: 'account', instType: 'SPOT', isPrivate: true, coin: 'default' },
+        { channel: 'orders', instType: 'SPOT', isPrivate: true, instId: 'default' },
+        ...symbols.map((s) => ({
+          channel: 'ticker' as Channel,
+          instType: 'SPOT',
+          instId: s,
+          isPrivate: false,
+        })),
+      ],
+      async (payload: BitgetPayload) => {
+        // --- Wallet snapshot/update ---
+        if (payload.type === 'accountSnapshot') {
+          for (const coin of payload.data) {
             const token = await prisma.token.upsert({
               where: { ticker: coin.coin },
               update: {},
@@ -100,7 +105,6 @@ app.get('/stream', authMiddleware, async (req, res: Response) => {
             } catch (error) {
               console.error('Error getting earn quantity:', error);
             }
-
             await prisma.walletCoin.upsert({
               where: { userId_tokenId: { userId, tokenId: token.id } },
               update: {
@@ -121,10 +125,10 @@ app.get('/stream', authMiddleware, async (req, res: Response) => {
                 earnQuantity: parseFloat(earnQuantity),
                 uTime: coin.uTime,
               },
+              include: { token: true },
             });
           }
 
-          // 🔥 Push snapshot aux clients SSE
           const wallet = await prisma.walletCoin.findMany({
             where: { userId },
             include: { token: true },
@@ -136,9 +140,8 @@ app.get('/stream', authMiddleware, async (req, res: Response) => {
             .forEach((c) => c.res.write(`event: snapshot\ndata: ${JSON.stringify(wallet)}\n\n`));
         }
 
-        if ('update' in payload) {
-          const coin = payload.update;
-
+        if (payload.type === 'accountUpdate') {
+          const coin = payload.data;
           const token = await prisma.token.upsert({
             where: { ticker: coin.coin },
             update: {},
@@ -180,35 +183,35 @@ app.get('/stream', authMiddleware, async (req, res: Response) => {
             include: { token: true },
           });
 
-          // 🔥 Push update aux clients SSE
           clients
             .filter((c) => c.userId === userId)
             .forEach((c) => c.res.write(`event: update\ndata: ${JSON.stringify(updatedCoin)}\n\n`));
         }
-      },
-      () => {
-        delete userWebSockets[userId];
+
+        // --- Orders snapshot/update ---
+        if (payload.type === 'ordersSnapshot' || payload.type === 'ordersUpdate') {
+          clients
+            .filter((c) => c.userId === userId)
+            .forEach((c) =>
+              c.res.write(`event: orders\ndata: ${JSON.stringify(payload.data)}\n\n`),
+            );
+        }
+
+        // --- Prix marché ---
+        if (payload.type === 'ticker') {
+          clients
+            .filter((c) => c.userId === userId)
+            .forEach((c) => c.res.write(`event: price\ndata: ${JSON.stringify(payload.data)}\n\n`));
+        }
       },
     );
   }
 
-  // --- WS public (prix marché) ---
-  if (!userPublicWebSockets[userId]) {
-    const symbols = initialWallet.map((c) => `${c.token.ticker}USDT`);
-
-    connectPublicTickers(symbols, (ticker) => {
-      clients
-        .filter((c) => c.userId === userId)
-        .forEach((c) => c.res.write(`event: price\ndata: ${JSON.stringify(ticker)}\n\n`));
-    });
-  }
-
-  // Keep-alive ping
+  // Keep-alive SSE
   const keepAlive = setInterval(() => {
     res.write(`event: ping\ndata: "keep-alive"\n\n`);
   }, 15000);
 
-  // Déconnexion client
   req.on('close', () => {
     clearInterval(keepAlive);
     clients = clients.filter((c) => c !== client);

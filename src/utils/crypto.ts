@@ -23,3 +23,12 @@ export function decrypt(encrypted: string) {
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
 }
+
+export function signWsAuth(apiSecret: string) {
+  const timestamp = Date.now().toString();
+  const prehash = timestamp + 'GET' + '/user/verify';
+
+  const sign = crypto.createHmac('sha256', apiSecret).update(prehash).digest('base64');
+
+  return { sign, timestamp };
+}
