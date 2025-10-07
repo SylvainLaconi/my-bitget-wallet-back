@@ -26,6 +26,10 @@ app.use(cookieParser());
 app.use(express.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/tokens', tokensRoutes);
+app.get('/keep-alive', (req, res) => {
+  console.info('🔄 Keep-alive');
+  res.send('OK');
+});
 
 // Typage clients SSE
 type SSEClient = { res: Response; userId: string };
