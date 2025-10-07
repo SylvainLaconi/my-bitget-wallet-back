@@ -17,7 +17,7 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
     req.userId = payload.userId;
     next();
   } catch (e) {
-    console.error(e);
+    console.error('authMiddleware error', e);
     return res.status(401).json({ error: 'Token invalide' });
   }
 }
