@@ -39,7 +39,7 @@ router.post('/login', async (req, res) => {
 
   if (!valid) return res.status(401).json({ error: 'Mot de passe incorrect' });
 
-  const accessToken = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '1h' });
+  const accessToken = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '12h' });
 
   res.json({ accessToken, user: { id: user.id, email: user.email } });
 });
